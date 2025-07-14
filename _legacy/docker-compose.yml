@@ -1,0 +1,25 @@
+version: '3'
+
+services:
+  screen-share-server:
+    build: .
+    ports:
+      - "8000:8000"  # TCP streaming port
+      - "54545:54545/udp"  # UDP discovery port
+    environment:
+      - DISPLAY=${DISPLAY}  # For X11 forwarding if needed
+      - CONNECTION_ID=123456  # Default connection ID
+      - PASSWORD=1234  # Default password
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix  # For X11 forwarding (Linux host)
+    # For headless operation only - no GUI
+    command: python screen_share_server.py
+    restart: unless-stopped
+    
+  # Optional Cloudflared tunnel service (Linux only)
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   command: tunnel --no-autoupdate --url tcp://screen-share-server:8000
+  #   depends_on:
+  #     - screen-share-server
+  #   restart: unless-stopped

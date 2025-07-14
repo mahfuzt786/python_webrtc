@@ -1,0 +1,8 @@
+version: "3.9"
+services:
+  signalling:
+    build: .
+    container_name: webrtc_signalling
+    ports:
+      - "8765:8765"  # host:container
+    restart: unless-stopped
