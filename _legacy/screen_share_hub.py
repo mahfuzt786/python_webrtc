@@ -26,6 +26,7 @@ import tkinter as tk
 import logging
 from tkinter import messagebox
 from typing import Optional, Dict, Any, Tuple
+from security import safe_command
 
 # Configure logging
 logging.basicConfig(
@@ -73,7 +74,7 @@ def find_cloudflared() -> Optional[str]:
     for path in possible_paths:
         if os.path.isfile(path):
             try:
-                result = subprocess.run([path, "version"], 
+                result = safe_command.run(subprocess.run, [path, "version"], 
                                       stdout=subprocess.PIPE, 
                                       stderr=subprocess.PIPE,
                                       text=True,
@@ -286,8 +287,7 @@ class HubApp:
                 self.status_var.set("Starting Cloudflare Tunnel...")
                 self.root.update()
                 
-                process = subprocess.Popen(
-                    [CLOUDFLARED_PATH, "tunnel", "--url", f"tcp://localhost:{TCP_PORT}"],
+                process = safe_command.run(subprocess.Popen, [CLOUDFLARED_PATH, "tunnel", "--url", f"tcp://localhost:{TCP_PORT}"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,

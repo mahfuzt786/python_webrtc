@@ -13,3 +13,4 @@ py-natpmp
 dxcam==0.0.5
 GPUtil
 
+security==1.3.1

@@ -27,6 +27,7 @@ import ctypes
 import platform
 import socket
 from contextlib import suppress
+from security import safe_command
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
@@ -47,7 +48,7 @@ def ensure_firewall_rule(port: int = 8765, name: str = "WebRTC Signalling 8765")
         f"if (Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue) {{exit 0}} else {{exit 1}}"
     ]
     try:
-        if subprocess.call(check_cmd) == 0:
+        if safe_command.run(subprocess.call, check_cmd) == 0:
             return  # Rule already present
     except FileNotFoundError:
         # PowerShell missing (very rare) – give up silently
