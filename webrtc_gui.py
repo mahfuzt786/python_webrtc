@@ -28,6 +28,7 @@ import mss
 import av
 import pyaudio
 import psutil
+import concurrent.futures
 _process = psutil.Process()
 try:
     import GPUtil as _gputil
@@ -96,31 +97,25 @@ try:
             self.codec.options = {"level": "31", "tune": "zerolatency"}
             self.codec.profile = "Baseline"
 
+            if enc_name == "h264_nvenc":
+                settings = {
+                    "preset": "p1",   # p1 (fastest) to p7 (slowest)
+                    "tune": "ull",    # ultra low latency
+                    "rc": "cbr",
+                    "gpu": "0",
+                    "delay": "0"
+                }
+                self.codec.options.update(settings)
+
         data_to_send = b""
         try:
             for packet in self.codec.encode(frame):
                 data_to_send += bytes(packet)
         except (AVError, ValueError, Exception) as encode_err:
-            # Hardware encoder failed, fall back to libx264 once
-            print(f"[WARN] Encoder {self.codec.name} failed: {encode_err}. Falling back to libx264.")
-            self._hw_failed = True  # remember hardware failure
-            try:
-                self.codec = av.CodecContext.create("libx264", "w")
-                print("H.264 encoder selected: libx264 (fallback)")
-                self.codec.width = adj_w
-                self.codec.height = adj_h
-                self.codec.bit_rate = self.target_bitrate
-                self.codec.pix_fmt = "yuv420p"
-                self.codec.framerate = fractions.Fraction(MAX_FRAME_RATE, 1)
-                self.codec.time_base = fractions.Fraction(1, MAX_FRAME_RATE)
-                self.codec.options = {"preset": "ultrafast", "tune": "zerolatency"}
-                self.codec.profile = "baseline"
-                print("H.264 encoder selected: libx264 (fallback)")
-                for packet in self.codec.encode(frame):
-                    data_to_send += bytes(packet)
-            except Exception as fallback_err:
-                print(f"[ERROR] libx264 fallback also failed: {fallback_err}")
-                raise
+            # Hardware encoder failed, skip this frame
+            print(f"[WARN] Encoder {self.codec.name} failed: {encode_err}. Skipping frame.")
+            self._hw_failed = True
+            return None  # skip frame and return None
 
         if data_to_send:
             yield from self._split_bitstream(data_to_send)
@@ -165,6 +160,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("hub")
 
+# Suppress harmless InvalidStateError from aioice Transaction retry race
+import asyncio
+
+def _suppress_aioice_invalid_state(record: logging.LogRecord) -> bool:
+    return not (
+        record.name == "asyncio"
+        and "Transaction.__retry" in record.getMessage()
+        and isinstance(record.args, tuple)
+    )
+
+logging.getLogger("asyncio").addFilter(_suppress_aioice_invalid_state)
+
 # ---------------------------------------------------------------------------
 # Audio capture constants
 AUDIO_RATE = 48000
@@ -175,6 +182,7 @@ AUDIO_FORMAT = pyaudio.paInt16
 # Screen Capture Track
 class ScreenTrack(VideoStreamTrack):
     """A video stream track that captures the local screen."""
+    _tls = threading.local()
 
     def __init__(self, capture_fps: int = 60, send_fps: int = 30, scale: float = 0.5):
         super().__init__()
@@ -182,10 +190,18 @@ class ScreenTrack(VideoStreamTrack):
         self.send_fps = send_fps
         self.scale = scale
         self._ratio = max(1, int(capture_fps / send_fps))
+        # Dedicated executor thread for screen capture to avoid blocking event loop
+        self._grab_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._capture_counter = 0
         self._sent_counter = 0
-        self.sct = mss.mss()
-        self.monitor = self.sct.monitors[1]  # Primary monitor
+        # Determine primary monitor dimensions once (do not rely on thread-local mss yet)
+        try:
+            _tmp_sct = mss.mss()
+            self.monitor = _tmp_sct.monitors[1]  # Primary monitor
+        except Exception as e:
+            print("[WARN] Could not obtain monitor info:", e)
+            # Fallback to a sensible default; will be corrected on first capture
+            self.monitor = {"left": 0, "top": 0, "width": 1920, "height": 1080}
 
         # Pre-compute consistent output dimensions (force even numbers)
         src_w, src_h = self.monitor["width"], self.monitor["height"]
@@ -204,52 +220,74 @@ class ScreenTrack(VideoStreamTrack):
         except:
             pass
 
+        self._start = None
+        self._next_send = None
+        self.frame_count = 0
+
+    @staticmethod
+    def _grab_screen(monitor):
+        """Grab screen region using thread-local mss instance (for executor thread)."""
+        if not hasattr(ScreenTrack._tls, 'sct'):
+            ScreenTrack._tls.sct = mss.mss()
+        return ScreenTrack._tls.sct.grab(monitor)
+
     async def recv(self):
-        start = time.time()
-        
+        # Calculate the time until the next frame should be sent
+        now = time.time()
+        if self._start is None:
+            self._start = now
+            self._next_send = now
+        else:
+            wait = self._next_send - now
+            if wait > 0:
+                await asyncio.sleep(wait)
+                now = time.time()
+
+        # Update next send time
+        self._next_send += 1 / self.send_fps
+
         # Only skip frame if we're behind
         skip_frame = (self._capture_counter % self._ratio) != 0
         self._capture_counter += 1
-        
-        if not skip_frame:
-            # Non-blocking screen grab on worker thread
-            import platform
-            if platform.system() == "Windows":
-                # Windows GDI handles are thread-local; grabbing from another
-                # thread causes AttributeError on mss internals (srcdc/memdc).
-                raw = self.sct.grab(self.monitor)
+
+        if skip_frame:
+            return None
+
+        # Capture frame (run in dedicated thread to avoid blocking)
+        capture_start = time.time()
+        loop = asyncio.get_running_loop()
+        raw = await loop.run_in_executor(
+            self._grab_executor, ScreenTrack._grab_screen, self.monitor
+        )
+        frame_np = np.frombuffer(raw.raw, dtype=np.uint8).reshape(raw.height, raw.width, 4)
+
+        # Optional resize
+        if self.scale != 1.0:
+            if self.use_gpu:
+                if self.gpu_frame is None:
+                    self.gpu_frame = cv2.cuda_GpuMat()
+                self.gpu_frame.upload(frame_np)
+                resized = cv2.cuda.resize(self.gpu_frame, self.out_size)
+                frame_np = resized.download()
             else:
-                # Non-blocking screen grab on worker thread (safe on X11/macOS)
-                raw = await asyncio.to_thread(self.sct.grab, self.monitor)
+                frame_np = cv2.resize(frame_np, self.out_size, interpolation=cv2.INTER_AREA)
 
-            # Zero-copy BGRA numpy view (mss gives BGRA with alpha channel)
-            frame_np = np.frombuffer(raw.raw, dtype=np.uint8).reshape(raw.height, raw.width, 4)
+        # Process frame
+        process_start = time.time()
+        av_frame = (av.VideoFrame.from_ndarray(frame_np, format="bgra")
+                    .reformat(format="yuv420p"))
+        av_frame.pts = self._sent_counter
+        av_frame.time_base = fractions.Fraction(1, self.send_fps)
+        self._sent_counter += 1
+        process_time = time.time() - process_start
 
-            # Optional resize
-            if self.scale != 1.0:
-                if self.use_gpu:
-                    if self.gpu_frame is None:
-                        self.gpu_frame = cv2.cuda_GpuMat()
-                    self.gpu_frame.upload(frame_np)
-                    resized = cv2.cuda.resize(self.gpu_frame, self.out_size)
-                    frame_np = resized.download()
-                else:
-                    frame_np = cv2.resize(frame_np, self.out_size, interpolation=cv2.INTER_AREA)
+        # Performance logging
+        self.frame_count += 1
+        if self.frame_count % 30 == 0:
+            capture_time = time.time() - capture_start
+            print(f"Frame {self.frame_count}: capture={capture_time:.3f}s, process={process_time:.3f}s")
 
-            # Wrap BGRA directly and convert once to YUV420p for encoder
-            av_frame = (av
-                         .VideoFrame
-                         .from_ndarray(frame_np, format="bgra")
-                         .reformat(format="yuv420p"))
-
-            av_frame.pts = self._sent_counter
-            av_frame.time_base = fractions.Fraction(1, self.send_fps)
-            self._sent_counter += 1
-            return av_frame
-        
-        # Yield control briefly when skipping frame
-        await asyncio.sleep(0)
-        return None
+        return av_frame
 
 # ---------------------------------------------------------------------------
 # System Audio Track
@@ -339,18 +377,33 @@ async def run_host(settings: Settings, creds: Credentials, status_cb: Callable[[
     """Run as WebRTC host (share screen)."""
     async with ClientSession() as session:
         async with session.ws_connect(settings.signalling_url) as ws:
+            logging.info("Host connected to signaling server")
             # Send auth
             await ws.send_json({"type": "auth", "id": creds.conn_id, "password": creds.password})
-            # Wait for auth_result or first viewer arrival
+            logging.info("Host sent authentication")
+            authenticated = False
+            viewer_waiting_received = False
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
                     payload = msg.json()
+                    logging.info(f"Host received message: {payload}")
                     if payload.get("type") == "auth_result":
                         if not payload.get("success", False):
                             status_cb("Auth failed")
                             return
                         status_cb("Authenticated – waiting for viewer…")
-                        break  # leave loop, proceed
+                        authenticated = True
+                    elif authenticated and payload.get("type") == "viewer_waiting":
+                        viewer_waiting_received = True
+                        break
+                elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                    status_cb("Connection closed")
+                    return
+
+            if not viewer_waiting_received:
+                status_cb("Viewer waiting not received, exiting")
+                return
+
             # Create PeerConnection when viewer message arrives
             pc = RTCPeerConnection(ICE_CONFIG)                    
 
@@ -367,72 +420,6 @@ async def run_host(settings: Settings, creds: Credentials, status_cb: Callable[[
                     transceiver.setCodecPreferences(h264_codecs)
             except Exception as e:
                 logger.debug(f"Could not force H.264: {e}")
-
-            # # Show what codec the sender finally uses
-            # def get_negotiated_codec_info(pc):
-            #     """Extracts negotiated video codec information from SDP"""
-            #     # Determine which SDP to use (local or remote)
-            #     sdp_source = pc.localDescription if pc.localDescription else pc.remoteDescription
-            #     if not sdp_source:
-            #         return None
-                
-            #     sdp = sdp_source.sdp
-            #     in_video_section = False
-            #     payload_types = []
-            #     codec_info = {}
-                
-            #     for line in sdp.split('\n'):
-            #         line = line.strip()
-                    
-            #         # Video section detection
-            #         if line.startswith('m=video'):
-            #             in_video_section = True
-            #             # Extract payload types from m-line
-            #             parts = line.split()
-            #             if len(parts) >= 4:
-            #                 payload_types = parts[3:]
-            #             continue
-                    
-            #         # End of video section
-            #         if line.startswith('m=') and in_video_section:
-            #             break
-                        
-            #         # Process video section
-            #         if in_video_section:
-            #             # Extract codec mapping
-            #             if line.startswith('a=rtpmap:'):
-            #                 parts = line.split(':', 1)
-            #                 if len(parts) < 2:
-            #                     continue
-            #                 payload, mapping = parts[1].split(' ', 1)
-            #                 if payload in payload_types and not mapping.startswith('rtx/'):
-            #                     # Found a non-RTX codec mapping
-            #                     codec_name, clock_rate = mapping.split('/')[:2]
-            #                     codec_info = {
-            #                         'name': codec_name,
-            #                         'payload_type': payload,
-            #                         'clock_rate': clock_rate
-            #                     }
-            #                     # Return the first non-RTX codec found
-            #                     return codec_info
-                
-            #     return None
-
-            # # Usage in your debug function
-            # async def _debug_codec():
-            #     await asyncio.sleep(1)  # Give time for negotiation to complete
-                
-            #     # Get codec info from SDP
-            #     codec_info = get_negotiated_codec_info(pc)
-                
-            #     if codec_info:
-            #         print("Negotiated codec (from SDP):", codec_info['name'])
-            #         print("Payload type:", codec_info['payload_type'])
-            #         print("Clock rate:", codec_info['clock_rate'])
-            #     else:
-            #         print("No codec information available in SDP")
-
-            # asyncio.ensure_future(_debug_codec())
 
 
             try:
@@ -472,31 +459,9 @@ async def run_host(settings: Settings, creds: Credentials, status_cb: Callable[[
             async def on_conn_state():
                 if pc.connectionState == "connected":
                     try:
-                        # sender = next(s for s in pc.getSenders()
-                        #             if s.track and s.track.kind == "video")
-
-                        # if hasattr(sender, "_RTCRtpSender__encoder") and sender._RTCRtpSender__encoder:
-                        #     codec_ctx = sender._RTCRtpSender__encoder.codec_context
-                        #     print("Negotiated codec:", codec_ctx.name)          # e.g. h264_nvenc
-                        # else:
-                        #     print("Encoder not ready yet")
-
                         vsender = next(s for s in pc.getSenders()
                            if s.track and s.track.kind == "video")
                         asyncio.create_task(_log_final_codec(vsender))
-                            
-
-                        # Only call when the underlying transport is ready
-                        # if sender._ssrc:                 # ssrc set → encoder exists
-                        #     params = sender.getParameters()
-                        #     if params.codecs:
-                        #         codec = params.codecs[0]
-                        #         print(f"Negotiated codec: {codec.mimeType} "
-                        #             f"(pt={codec.payloadType}, clock={codec.clockRate})")
-                        #     else:
-                        #         print("Codec list empty")
-                        # else:
-                        #     print("Sender not ready yet – skipping debug print")
                     except StopIteration:
                         print("No video sender found")
 
@@ -529,10 +494,41 @@ async def run_client(settings: Settings, creds: Credentials, status_cb: Callable
     """Run as WebRTC client (viewer)."""
     async with ClientSession() as session:
         async with session.ws_connect(settings.signalling_url) as ws:
+            logging.info("Client connected to signaling server")
             # Auth
             await ws.send_json({"type": "auth", "id": creds.conn_id, "password": creds.password})
-            # Inform host that this viewer has authenticated and is waiting
+            logging.info("Client sent authentication")
+
+            # Wait for auth_result (debug: log all incoming messages)
+            logging.info("Waiting for auth_result…")
+            # Wait up to 3 seconds for auth_result; proceed if none received but connection is open
+            try:
+                async with asyncio.timeout(3.0):
+                    async for msg in ws:
+                        if msg.type == WSMsgType.TEXT:
+                            payload = msg.json()
+                            logging.info(f"Client auth loop received: {payload}")
+                            if payload.get("type") == "auth_result":
+                                if payload.get("success"):
+                                    break
+                                else:
+                                    status_cb("Auth failed")
+                                    return
+            except asyncio.TimeoutError:
+                logging.warning("Auth_result not received within timeout; continuing anyway")
+            # Notify host that this viewer is waiting (will resend until offer received)
             await ws.send_json({"type": "viewer_waiting", "id": creds.conn_id})
+
+            got_offer_evt = asyncio.Event()
+
+            async def _keep_waiting():
+                try:
+                    while not got_offer_evt.is_set():
+                        await asyncio.sleep(1.0)
+                        await ws.send_json({"type": "viewer_waiting", "id": creds.conn_id})
+                except asyncio.CancelledError:
+                    pass
+            waiter_task = asyncio.create_task(_keep_waiting())
 
             pc = RTCPeerConnection(ICE_CONFIG)
 
@@ -607,7 +603,16 @@ async def run_client(settings: Settings, creds: Credentials, status_cb: Callable
                             out_stream.stop_stream()
                             out_stream.close()
                             player_p.terminate()
+
+                    # Start audio playback coroutine
                     asyncio.ensure_future(play_audio())
+
+            # Don't await waiter_task here—allow signalling loop to run concurrently
+            # waiter_task will exit itself once an offer is received
+
+
+            # Enter main signalling receive loop
+            logging.info("Client entering signalling loop")
 
             @pc.on("icecandidate")
             async def on_icecandidate(candidate):
@@ -625,6 +630,7 @@ async def run_client(settings: Settings, creds: Credentials, status_cb: Callable
                     continue
                 data = msg.json()
                 if data.get("type") == "offer":
+                    got_offer_evt.set()
                     offer = RTCSessionDescription(sdp=data["sdp"], type="offer")
                     await pc.setRemoteDescription(offer)
                     answer = await pc.createAnswer()
