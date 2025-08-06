@@ -355,20 +355,30 @@ async def notify_viewer_waiting(settings: Settings, creds: Credentials):
 ICE_CONFIG = RTCConfiguration(
     iceServers=[
         RTCIceServer("stun:stun.l.google.com:19302"),
-        RTCIceServer(
-            "turn:turn4.viagenie.ca",
-            username="webrtc@live.com",
-            credential="muazkh",
-        ),
-        RTCIceServer(
-            "turn:numb.viagenie.ca",
-            username="webrtc@live.com",
-            credential="muazkh",
-        ),
+        # RTCIceServer(
+        #     "turn:turn4.viagenie.ca",
+        #     username="webrtc@live.com",
+        #     credential="muazkh",
+        # ),
+        # RTCIceServer(
+        #     "turn:numb.viagenie.ca",
+        #     username="webrtc@live.com",
+        #     credential="muazkh",
+        # ),
         RTCIceServer(
             "turn:xturn.readybill.app",
             username="firedrake",
             credential="toortoor",
+        ),
+        # Metered TURN – free, unlimited, supports UDP/TCP/TLS
+        RTCIceServer(
+            urls=[
+                'turn:openrelay.metered.ca:80',        # TCP
+                'turn:openrelay.metered.ca:443',       # TLS
+                'turn:openrelay.metered.ca:3478?transport=udp'
+            ],
+            username='openrelayproject',
+            credential='openrelayproject'
         ),
     ]
 )

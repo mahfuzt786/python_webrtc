@@ -16,7 +16,7 @@ IMPORTANT: Do NOT post this list to the issue-tracker. Use it as a basis for
 
 missing module named pwd - imported by posixpath (delayed, conditional, optional), shutil (delayed, optional), tarfile (optional), pathlib (delayed, optional), subprocess (delayed, conditional, optional), http.server (delayed, optional), psutil (optional), netrc (delayed, conditional), getpass (delayed), setuptools._distutils.util (delayed, conditional, optional), setuptools._vendor.backports.tarfile (optional), setuptools._distutils.archive_util (optional)
 missing module named grp - imported by shutil (delayed, optional), tarfile (optional), pathlib (delayed, optional), subprocess (delayed, conditional, optional), setuptools._vendor.backports.tarfile (optional), setuptools._distutils.archive_util (optional)
-missing module named posix - imported by os (conditional, optional), shutil (conditional), importlib._bootstrap_external (conditional), posixpath (optional)
+missing module named posix - imported by os (conditional, optional), posixpath (optional), shutil (conditional), importlib._bootstrap_external (conditional)
 missing module named resource - imported by posix (top-level)
 missing module named _frozen_importlib_external - imported by importlib._bootstrap (delayed), importlib (optional), importlib.abc (optional), zipimport (top-level)
 excluded module named _frozen_importlib - imported by importlib (optional), importlib.abc (optional), zipimport (top-level)
@@ -231,8 +231,6 @@ missing module named numpy._core.add - imported by numpy._core (top-level), nump
 missing module named _dummy_thread - imported by numpy._core.arrayprint (optional)
 missing module named bcrypt - imported by cryptography.hazmat.primitives.serialization.ssh (optional)
 missing module named av.video._VideoCodecName - imported by av.video (top-level), av.codec.context (top-level), av.container.output (top-level)
-missing module named 'cython.cimports' - imported by av.packet (top-level), av.audio.codeccontext (top-level), av.filter.loudnorm (top-level)
-missing module named cython - imported by av.packet (top-level), av.audio.codeccontext (top-level), av.filter.loudnorm (top-level)
 missing module named av.audio._AudioCodecName - imported by av.audio (top-level), av.codec.context (top-level), av.container.output (top-level)
 missing module named uvloop - imported by aiohttp.worker (delayed)
 missing module named asyncio.DefaultEventLoopPolicy - imported by asyncio (delayed, conditional), asyncio.events (delayed, conditional)
