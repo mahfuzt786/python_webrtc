@@ -17,7 +17,6 @@ need to expose the UDP/TCP ports or deploy an external broker.
 """
 
 import os
-import random
 import socket
 import subprocess
 import threading
@@ -26,6 +25,7 @@ import tkinter as tk
 import logging
 from tkinter import messagebox
 from typing import Optional, Dict, Any, Tuple
+import secrets
 
 # Configure logging
 logging.basicConfig(
@@ -97,11 +97,11 @@ BROADCAST_ADDR = "255.255.255.255"
 
 def generate_id() -> str:
     """Return a random 6-digit connection ID as a string."""
-    return f"{random.randint(0, 999999):06d}"
+    return f"{secrets.SystemRandom().randint(0, 999999):06d}"
 
 def generate_password() -> str:
     """Return a random 4-digit password."""
-    return f"{random.randint(0, 9999):04d}"
+    return f"{secrets.SystemRandom().randint(0, 9999):04d}"
 
 def get_local_ip() -> str:
     """Best-effort to obtain the local LAN IP address."""

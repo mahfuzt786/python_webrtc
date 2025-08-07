@@ -9,7 +9,6 @@ import sys
 import time
 import socket
 import signal
-import random
 import logging
 import threading
 import subprocess
@@ -21,6 +20,7 @@ import cv2
 from PIL import ImageGrab, Image
 import struct
 import pyaudio
+import secrets
 
 # Default settings
 TCP_PORT = 8000
@@ -344,8 +344,8 @@ class ScreenShareServer:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         
         # Server configuration variables
-        self.conn_id = tk.StringVar(value=f"{random.randint(100000, 999999)}")
-        self.password = tk.StringVar(value=f"{random.randint(1000, 9999)}")
+        self.conn_id = tk.StringVar(value=f"{secrets.SystemRandom().randint(100000, 999999)}")
+        self.password = tk.StringVar(value=f"{secrets.SystemRandom().randint(1000, 9999)}")
         self.tcp_port = tk.IntVar(value=TCP_PORT)
         self.udp_port = tk.IntVar(value=UDP_PORT)
         self.audio_enabled = BooleanVar(value=AUDIO_ENABLED)
@@ -1120,8 +1120,8 @@ class ServerGUI:
             pass
             
         # Variables
-        self.conn_id = tk.StringVar(value="".join(random.choices("0123456789", k=6)))
-        self.password = tk.StringVar(value="".join(random.choices("0123456789", k=4)))
+        self.conn_id = tk.StringVar(value="".join(secrets.SystemRandom().choices("0123456789", k=6)))
+        self.password = tk.StringVar(value="".join(secrets.SystemRandom().choices("0123456789", k=4)))
         self.port = tk.IntVar(value=TCP_PORT)
         self.discovery_port = tk.IntVar(value=UDP_PORT)
         self.audio_enabled = BooleanVar(value=AUDIO_ENABLED)
