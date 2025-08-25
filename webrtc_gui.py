@@ -28,6 +28,8 @@ import mss
 import av
 import pyaudio
 import psutil
+import pyautogui
+pyautogui.FAILSAFE = False
 import concurrent.futures
 _process = psutil.Process()
 try:
@@ -120,9 +122,20 @@ try:
         if data_to_send:
             yield from self._split_bitstream(data_to_send)
 
-    # apply monkey-patch
+    # Save original encode function and apply monkey-patch
+    _orig_encode_frame = H264Encoder._encode_frame
     H264Encoder._encode_frame = _encode_frame_hw  # type: ignore[assignment]
     print("Hardware H.264 encoder patch active (NVENC/QSV/VTB if present)")
+
+    # Runtime toggle for hardware encoder
+    def enable_hw_encoder(enable: bool = True):
+        """Enable or disable the hardware H.264 encoder patch at runtime."""
+        global HW_ENCODER_ENABLED
+        HW_ENCODER_ENABLED = enable
+        H264Encoder._encode_frame = _encode_frame_hw if enable else _orig_encode_frame  # type: ignore[assignment]
+
+    # Default: keep enabled (previous behaviour)
+    HW_ENCODER_ENABLED = True
 except Exception as _e:
     print("[WARN] Hardware encoder patch failed:", _e)
 # ---------------------------------------------------------------------------
@@ -138,6 +151,7 @@ from aiortc import (
     RTCConfiguration,
     RTCIceServer,
     RTCRtpSender,
+    RTCDataChannel,
 )
 
 # ---------------------------------------------------------------------------
@@ -194,6 +208,9 @@ class ScreenTrack(VideoStreamTrack):
         self._grab_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._capture_counter = 0
         self._sent_counter = 0
+        # Initialize send timing markers
+        self._start: float | None = None
+        self._next_send: float = 0.0
         # Determine primary monitor dimensions once (do not rely on thread-local mss yet)
         try:
             _tmp_sct = mss.mss()
@@ -214,14 +231,16 @@ class ScreenTrack(VideoStreamTrack):
         self.use_gpu = False
         self.gpu_frame = None
         try:
+            print("Checking for GPU acceleration")
+            print("cv2.cuda.getCudaEnabledDeviceCount()", cv2.cuda.getCudaEnabledDeviceCount())
             if cv2.cuda.getCudaEnabledDeviceCount() > 0:
                 self.use_gpu = True
                 print("Enabling GPU acceleration")
         except:
             pass
 
-        self._start = None
-        self._next_send = None
+        control_chan = None
+        remote_enabled = True
         self.frame_count = 0
 
     @staticmethod
@@ -340,6 +359,8 @@ class Settings:
     signalling_url: str
     fps: int
     scale: float
+    use_gpu: bool = True           # Enable GPU-accelerated capture
+    hw_encode: bool = True         # Enable hardware H.264 encoder
 
 # ---------------------------------------------------------------------------
 # Viewer waiting notifier ------------------------------------------------
@@ -417,6 +438,45 @@ async def run_host(settings: Settings, creds: Credentials, status_cb: Callable[[
             # Create PeerConnection when viewer message arrives
             pc = RTCPeerConnection(ICE_CONFIG)                    
 
+            # Create data channel for remote control
+            control_chan = pc.createDataChannel("control")
+
+            def _apply_remote_event(evt: dict):
+                try:
+                    if evt.get("type") == "mouse":
+                        subtype = evt.get("subtype")
+                        x = int(evt.get("x", 0))
+                        y = int(evt.get("y", 0))
+                        if subtype == "move":
+                            pyautogui.moveTo(x, y)
+                        elif subtype == "double":
+                            button = evt.get("button", "left")
+                            pyautogui.doubleClick(x, y, button=button)
+                        elif subtype == "click":
+                            button = evt.get("button", "left")
+                            down = evt.get("down", True)
+                            if down:
+                                pyautogui.mouseDown(x, y, button=button)
+                            else:
+                                pyautogui.mouseUp(x, y, button=button)
+                    elif evt.get("type") == "key":
+                        key = evt.get("key")
+                        down = evt.get("down", True)
+                        if down:
+                            pyautogui.keyDown(key)
+                        else:
+                            pyautogui.keyUp(key)
+                except Exception as e:
+                    logger.debug(f"Remote control error: {e}")
+
+            @control_chan.on("message")
+            def _on_control_message(msg):
+                try:
+                    evt = json.loads(msg)
+                    _apply_remote_event(evt)
+                except Exception as e:
+                    logger.debug(f"Invalid control message: {e}")
+
             # Add tracks
             video_track = ScreenTrack(capture_fps=settings.fps, send_fps=settings.fps, scale=settings.scale)
             pc.addTrack(video_track)
@@ -461,9 +521,9 @@ async def run_host(settings: Settings, creds: Credentials, status_cb: Callable[[
                 enc = sender._RTCRtpSender__encoder          # private, but works
                 if hasattr(enc, 'codec_context'):
                     ctx = enc.codec_context
-                    print(f"Final encoder: {ctx.name}  ({ctx.width}x{ctx.height}, br={ctx.bit_rate})")
+                    print(f"Final encoder (codec): {ctx.name}  ({ctx.width}x{ctx.height}, br={ctx.bit_rate})")
                 else:
-                    print(f"Final encoder: {enc.__class__.__name__}")
+                    print(f"Final encoder (NO codec): {enc.__class__.__name__}")
 
             @pc.on("connectionstatechange")
             async def on_conn_state():
@@ -500,7 +560,7 @@ async def run_host(settings: Settings, creds: Credentials, status_cb: Callable[[
                             }
                         )
 
-async def run_client(settings: Settings, creds: Credentials, status_cb: Callable[[str], None]):
+async def run_client(settings: Settings, creds: Credentials, status_cb: Callable[[str], None], enable_remote: bool = True):
     """Run as WebRTC client (viewer)."""
     async with ClientSession() as session:
         async with session.ws_connect(settings.signalling_url) as ws:
@@ -508,6 +568,11 @@ async def run_client(settings: Settings, creds: Credentials, status_cb: Callable
             # Auth
             await ws.send_json({"type": "auth", "id": creds.conn_id, "password": creds.password})
             logging.info("Client sent authentication")
+
+            # ---------------- Viewer control state ----------------
+            control_chan: Optional[RTCDataChannel] | None = None  # Assigned in on_datachannel
+            remote_enabled = enable_remote
+
 
             # Wait for auth_result (debug: log all incoming messages)
             logging.info("Waiting for auth_result…")
@@ -540,7 +605,65 @@ async def run_client(settings: Settings, creds: Credentials, status_cb: Callable
                     pass
             waiter_task = asyncio.create_task(_keep_waiting())
 
+            def _handle_mouse(event, x, y, flags, param):
+                if control_chan is None or control_chan.readyState != "open" or not remote_enabled:
+                    return
+                # Scale viewer coordinates back to host screen coordinates
+                scale_factor = settings.scale if settings.scale else 1.0
+                host_x = int(x / scale_factor)
+                host_y = int(y / scale_factor)
+                if event == cv2.EVENT_MOUSEMOVE:
+                    msg = {"type": "mouse", "subtype": "move", "x": host_x, "y": host_y}
+                elif event in (
+                    cv2.EVENT_LBUTTONDOWN, cv2.EVENT_LBUTTONUP,
+                    cv2.EVENT_RBUTTONDOWN, cv2.EVENT_RBUTTONUP,
+                    cv2.EVENT_MBUTTONDOWN, cv2.EVENT_MBUTTONUP,
+                    cv2.EVENT_LBUTTONDBLCLK, cv2.EVENT_RBUTTONDBLCLK, cv2.EVENT_MBUTTONDBLCLK,
+                ):
+                    button_map = {
+                        cv2.EVENT_LBUTTONDOWN: "left", cv2.EVENT_LBUTTONUP: "left",
+                        cv2.EVENT_RBUTTONDOWN: "right", cv2.EVENT_RBUTTONUP: "right",
+                        cv2.EVENT_MBUTTONDOWN: "middle", cv2.EVENT_MBUTTONUP: "middle",
+                        cv2.EVENT_LBUTTONDBLCLK: "left", cv2.EVENT_RBUTTONDBLCLK: "right", cv2.EVENT_MBUTTONDBLCLK: "middle",
+                    }
+                    if event in (cv2.EVENT_LBUTTONDBLCLK, cv2.EVENT_RBUTTONDBLCLK, cv2.EVENT_MBUTTONDBLCLK):
+                        # Treat double-click as a separate subtype
+                        msg = {
+                            "type": "mouse",
+                            "subtype": "double",
+                            "x": host_x,
+                            "y": host_y,
+                            "button": button_map.get(event, "left"),
+                        }
+                    else:
+                        down = event in (
+                            cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN
+                        )
+                        msg = {
+                            "type": "mouse",
+                            "subtype": "click",
+                            "x": host_x,
+                            "y": host_y,
+                            "button": button_map.get(event, "left"),
+                            "down": down,
+                        }
+                else:
+                    return
+                try:
+                    control_chan.send(json.dumps(msg))
+                except Exception as e:
+                    logger.debug(f"Send mouse error: {e}")
+
             pc = RTCPeerConnection(ICE_CONFIG)
+
+            # -------------------------------------------------------------------
+            # Data channel event: assign incoming control channel to variable
+            # -------------------------------------------------------------------
+            @pc.on("datachannel")
+            def on_datachannel(channel):
+                nonlocal control_chan
+                control_chan = channel
+                logger.info("Data channel received: %s", channel.label)
 
             # Handle incoming tracks
             @pc.on("track")
@@ -550,6 +673,10 @@ async def run_client(settings: Settings, creds: Credentials, status_cb: Callable
                     status_cb("Receiving video…")
 
                     async def consume():
+                        nonlocal control_chan, remote_enabled
+
+                        # Ensure ScreenShare window exists before callbacks
+                        cv2.namedWindow("ScreenShare", cv2.WINDOW_NORMAL)
                         #  frame_count = 0
                         frame_count = 1
                         last_ts = time.time()
@@ -581,8 +708,21 @@ async def run_client(settings: Settings, creds: Credentials, status_cb: Callable
                                     #     overlay += f"  GPU:{gpu:.0f}%"
                                     cv2.putText(img, overlay, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1,
                                                 (0, 255, 0), 2)
+                                # Set mouse callback once window initialized
+                                if control_chan is not None:
+                                    cv2.setMouseCallback("ScreenShare", lambda ev,x,y,flags,param: _handle_mouse(ev,x,y,flags,param))
                                 cv2.imshow("ScreenShare", img)
-                                if cv2.waitKey(1) & 0xFF == ord("q"):
+                                key_code = cv2.waitKey(1) & 0xFF
+                                if key_code != 255 and control_chan is not None and control_chan.readyState == "open" and remote_enabled:
+                                    key_str = chr(key_code) if key_code < 128 else str(key_code)
+                                    # Send key down
+                                    try:
+                                        control_chan.send(json.dumps({"type": "key", "key": key_str, "down": True}))
+                                        # Immediately send key up to emulate complete key press
+                                        control_chan.send(json.dumps({"type": "key", "key": key_str, "down": False}))
+                                    except Exception as e:
+                                        logger.debug(f"Send key error: {e}")
+                                if key_code == ord("q"):
                                     break
                         finally:
                             await pc.close()
@@ -777,37 +917,50 @@ class HubGUI:
         # Update scale label whenever slider moves
         self.scale_var.trace_add('write', lambda *a: self.scale_text.set(f"{self.scale_var.get():.2f}"))
 
+        # GPU / Encoder toggles (host only)
+        self.gpu_var = tk.BooleanVar(value=True)
+        self.hw_var  = tk.BooleanVar(value=True)
+        self.gpu_chk = ttk.Checkbutton(frm, text="GPU Capture", variable=self.gpu_var)
+        self.hw_chk  = ttk.Checkbutton(frm, text="HW H.264",   variable=self.hw_var)
+        self.gpu_chk.grid(row=6, column=0, sticky="w")
+        self.hw_chk.grid(row=6, column=1, sticky="w")
+
+        # Remote control toggle (viewer only)
+        self.remote_var = tk.BooleanVar(value=True)
+        self.remote_chk = ttk.Checkbutton(frm, text="Enable Remote Control", variable=self.remote_var)
+        self.remote_chk.grid(row=6, column=2, columnspan=2, sticky="w")
+
         # Initialize server label once
         self._update_server_label()
 
         # Buttons
         self.btn_host = ttk.Button(frm, text="Share Screen", style="Accent.TButton", command=self.start_host)
-        self.btn_host.grid(row=6, column=0, pady=pad, sticky="we")
+        self.btn_host.grid(row=7, column=0, pady=pad, sticky="we")
         self.btn_client = ttk.Button(frm, text="Connect", style="Accent.TButton", command=self.start_client)
-        self.btn_client.grid(row=6, column=1, columnspan=2, pady=pad, sticky="we")
+        self.btn_client.grid(row=7, column=1, columnspan=2, pady=pad, sticky="we")
 
         # Info label
-        ttk.Label(frm, text="First connect by host's credentials then Share Screen in the host PC.", foreground="gray").grid(row=8, column=0, columnspan=3, pady=(0, pad))
+        ttk.Label(frm, text="First connect by host's credentials then Share Screen in the host PC.", foreground="gray").grid(row=9, column=0, columnspan=3, pady=(0, pad))
 
         # Status label
-        ttk.Label(frm, textvariable=self.status_var, foreground="blue").grid(row=9, column=0, columnspan=3, pady=(pad, 0))
+        ttk.Label(frm, textvariable=self.status_var, foreground="blue").grid(row=10, column=0, columnspan=3, pady=(pad, 0))
         # Status indicator (red/orange/green)
         self.indicator_canvas = tk.Canvas(frm, width=16, height=16, highlightthickness=0, bg=bg)
-        self.indicator_canvas.grid(row=9, column=3, padx=(pad, 0))
+        self.indicator_canvas.grid(row=10, column=3, padx=(pad, 0))
         self.indicator = self.indicator_canvas.create_oval(2, 2, 14, 14, fill="red", outline="")
 
         # Spinner (indeterminate progress)
         self.spinner = ttk.Progressbar(frm, mode="indeterminate", length=120)
-        self.spinner.grid(row=10, column=0, columnspan=3, pady=(0, pad))
+        self.spinner.grid(row=11, column=0, columnspan=3, pady=(0, pad))
         self.spinner.grid_remove()
 
         # Local IP display
         ip_list = ", ".join(get_local_ips()) or "N/A"
-        ttk.Label(frm, text=f"Your IP(s): {ip_list}", foreground="gray").grid(row=11, column=0, columnspan=3, pady=(0, pad))
+        ttk.Label(frm, text=f"Your IP(s): {ip_list}", foreground="gray").grid(row=12, column=0, columnspan=3, pady=(0, pad))
 
         # Public IP display
         public_ip = get_public_ip()
-        ttk.Label(frm, text=f"Public IP: {public_ip or 'Unavailable'}", foreground="gray").grid(row=12, column=0, columnspan=3, pady=(0, pad))
+        ttk.Label(frm, text=f"Public IP: {public_ip or 'Unavailable'}", foreground="gray").grid(row=13, column=0, columnspan=3, pady=(0, pad))
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         # Set initial button states
@@ -838,8 +991,18 @@ class HubGUI:
         # Enable/disable sliders
         if mode == "host":
             self.scale_slider.state(["!disabled"])
+            self.gpu_chk.state(["!disabled"])
+            self.hw_chk.state(["!disabled"])
         else:
             self.scale_slider.state(["disabled"])
+            self.gpu_chk.state(["disabled"])
+            self.hw_chk.state(["disabled"])
+
+        # Remote control checkbox enabled only in viewer mode
+        if mode == "host":
+            self.remote_chk.state(["disabled"])
+        else:
+            self.remote_chk.state(["!disabled"])
 
     # ---------------- Internal helpers ----------------
     def _update_server_label(self):
@@ -992,7 +1155,7 @@ class HubGUI:
         creds = Credentials(self.id_var.get().strip(), self.pw_var.get().strip())
         settings = Settings(self.sig_var.get().strip(), self.fps_var.get(), self.scale_var.get())
         self._status("Connecting to host…")
-        self._start_session(run_client(settings, creds, self._status), "client")
+        self._start_session(run_client(settings, creds, self._status, self.remote_var.get()), "client")
 
     # ---------------- Cleanup ----------------
     def on_close(self):

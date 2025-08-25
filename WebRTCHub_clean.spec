@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for WebRTCHub (clean)
+"""PyInstaller spec for WebRTCHub_Windows (clean)
 Build with:
     pyinstaller WebRTCHub_clean.spec
 """
@@ -59,7 +59,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="WebRTCHub",
+    name="WebRTCHub_Windows",
     console=True,  # show console for debug
 )
 
@@ -70,5 +70,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    name="WebRTCHub",
+    name="WebRTCHub_Windows",
 )

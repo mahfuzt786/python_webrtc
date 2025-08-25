@@ -12,4 +12,5 @@ miniupnpc
 py-natpmp
 dxcam==0.0.5
 GPUtil
+pyautogui
 
