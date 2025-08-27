@@ -1,4 +1,4 @@
-('C:\\xampp\\htdocs\\alegra\\webRTC\\build\\WebRTCHub_clean\\WebRTCHub.pkg',
+('C:\\xampp\\htdocs\\alegra\\webRTC\\build\\WebRTCHub_clean\\WebRTCHub_Windows.pkg',
  {'BINARY': True,
   'DATA': True,
   'EXECUTABLE': True,

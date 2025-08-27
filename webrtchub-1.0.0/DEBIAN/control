@@ -1,0 +1,10 @@
+Package: webrtchub
+Version: 1.0.0
+Section: video
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.10), python3-venv, python3-pip, ffmpeg, portaudio19-dev, libsrtp2-1, libpulse0, libffi8, libssl3
+Maintainer: Your Name <you@example.com>
+Homepage: https://github.com/your-org/webrtchub
+Description: WebRTC Screen Share Hub (host & viewer)
+ A simple cross-platform GUI for real-time screen sharing using WebRTC.
