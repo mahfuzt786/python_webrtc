@@ -8,7 +8,6 @@ import time
 import threading
 import socket
 import logging
-import random
 import signal
 import cv2
 import numpy as np
@@ -18,6 +17,7 @@ import pyaudio
 import struct
 import argparse
 from typing import Dict, Tuple, Optional, List, Set
+import secrets
 
 # Configure logging
 logging.basicConfig(
@@ -29,8 +29,8 @@ logging.basicConfig(
 # Constants
 TCP_PORT = int(os.environ.get("PORT", 8000))
 UDP_PORT = int(os.environ.get("DISCOVERY_PORT", 54545))
-CONNECTION_ID = os.environ.get("CONNECTION_ID", "".join(random.choices("0123456789", k=6)))
-PASSWORD = os.environ.get("PASSWORD", "".join(random.choices("0123456789", k=4)))
+CONNECTION_ID = os.environ.get("CONNECTION_ID", "".join(secrets.SystemRandom().choices("0123456789", k=6)))
+PASSWORD = os.environ.get("PASSWORD", "".join(secrets.SystemRandom().choices("0123456789", k=4)))
 FRAME_RATE = 30
 CHUNK_SIZE = 1024
 AUDIO_FORMAT = pyaudio.paInt16

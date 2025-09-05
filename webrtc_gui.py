@@ -12,7 +12,6 @@ Currently streams video; audio will be re-enabled in a later update.
 import asyncio
 import fractions
 import logging
-import random
 import socket
 import threading
 import time
@@ -31,6 +30,8 @@ import psutil
 import pyautogui
 pyautogui.FAILSAFE = False
 import concurrent.futures
+import secrets
+
 _process = psutil.Process()
 try:
     import GPUtil as _gputil
@@ -881,11 +882,11 @@ class HubGUI:
         rb_client.grid(row=0, column=2, sticky="w")
 
         ttk.Label(frm, text="Connection ID:").grid(row=1, column=0, sticky="e", pady=pad)
-        self.id_var = tk.StringVar(value=f"{random.randint(0, 999999):06d}")
+        self.id_var = tk.StringVar(value=f"{secrets.SystemRandom().randint(0, 999999):06d}")
         ttk.Entry(frm, textvariable=self.id_var, width=10, justify="center").grid(row=1, column=1, pady=pad)
 
         ttk.Label(frm, text="Password:").grid(row=2, column=0, sticky="e", pady=pad)
-        self.pw_var = tk.StringVar(value=f"{random.randint(0, 9999):04d}")
+        self.pw_var = tk.StringVar(value=f"{secrets.SystemRandom().randint(0, 9999):04d}")
         ttk.Entry(frm, textvariable=self.pw_var, width=10, justify="center").grid(row=2, column=1, pady=pad)
 
         ttk.Label(frm, text="Signalling URL:").grid(row=3, column=0, sticky="e", pady=pad)
@@ -974,9 +975,9 @@ class HubGUI:
             self.btn_client.state(["disabled"])
             # Auto-fill credentials if blank when switching back to Host mode
             if not self.id_var.get():
-                self.id_var.set(f"{random.randint(0, 999999):06d}")
+                self.id_var.set(f"{secrets.SystemRandom().randint(0, 999999):06d}")
             if not self.pw_var.get():
-                self.pw_var.set(f"{random.randint(0, 9999):04d}")
+                self.pw_var.set(f"{secrets.SystemRandom().randint(0, 9999):04d}")
         else:
             self.btn_host.state(["disabled"])
             self.btn_client.state(["!disabled"])
