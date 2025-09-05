@@ -44,10 +44,46 @@ Your prompt should now start with **(webenv)**.
 
 ## 4. Install dependencies
 
+### Windows
 ```powershell
 pip install -r requirements.txt
 ```
+
+### Linux
+```bash
+pip install -r requirements_linux.txt
+```
+
+### macOS
+```bash
+pip install -r requirements_mac.txt
+```
 The process can take a few minutes – it pulls packages such as **OpenCV**, **aiortc**, **PyAudio**, etc.
+
+> **Linux extra packages**  
+> *Before* running `pip`, install your distro’s Tk + PortAudio bindings so that `tkinter` and `pyaudio` imports succeed:
+>
+> ```bash
+> # Debian / Ubuntu
+> sudo apt update && sudo apt install python3-tk python3-pyaudio
+>
+> # Fedora
+> sudo dnf install python3-tkinter python3-pyaudio
+>
+> # Arch
+> sudo pacman -S tk pyaudio
+> ```
+>
+> **macOS Homebrew users**  
+> If the PyAudio wheel fails, install the PortAudio library first:
+>
+> ```bash
+> brew install portaudio
+> pip install pyaudio
+> ```
+>
+> On Windows everything is included in the official Python installer.
+
 
 If PyAudio fails, install the matching pre-built wheel from https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio and retry.
 

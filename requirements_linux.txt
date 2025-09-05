@@ -1,0 +1,19 @@
+# Linux-specific requirements for WebRTCHub
+# Windows-only packages removed (e.g. dxcam)
+# Additional Linux helper packages added where appropriate
+
+opencv-python>=4.5.0
+numpy>=1.20.0
+mss>=9.0.1
+pillow>=9.0.0
+# PyAudio is provided by your distro (e.g. `sudo apt install python3-pyaudio`).
+aiortc>=1.6.0
+av>=12.0
+aiohttp>=3.9.5
+miniupnpc
+natpmp
+GPUtil
+pyautogui
+# Needed for PyAutoGUI on X11
+python-xlib>=0.31
+psutil>=5.9.0
