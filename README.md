@@ -70,6 +70,27 @@ The process can take a few minutes – it pulls packages such as **OpenCV**, **a
 >
 > On Windows everything is included in the official Python installer.
 
+---
+
+### PyAutoGUI – Linux troubleshooting
+`PyAutoGUI` is pure-Python but relies on some native tools. If `pip install pyautogui` fails or the module later crashes, ensure the following distro packages are present:
+
+| Purpose | Debian / Ubuntu | Fedora | Arch |
+|---------|-----------------|--------|------|
+| Xlib bindings (mouse / keyboard) | `python3-xlib` | `python3-Xlib` | `python-xlib` |
+| Tk message boxes | `python3-tk` | `python3-tkinter` | `tk` |
+| Screenshot backend | `scrot` | `scrot` | `scrot` |
+| Pillow build deps | `build-essential libjpeg-dev zlib1g-dev libfreetype6-dev libtiff-dev libopenjp2-7-dev` | *groupinstall* `"Development Tools"` + `libjpeg-turbo-devel zlib-devel freetype-devel libtiff-devel openjpeg2-devel` | `base-devel libjpeg-turbo zlib freetype2 libtiff openjpeg2` |
+
+Quick fix:
+```bash
+sudo apt update && sudo apt install python3-xlib python3-tk scrot \
+    build-essential libjpeg-dev zlib1g-dev libfreetype6-dev libtiff-dev libopenjp2-7-dev
+# re-install inside venv
+pip install --force-reinstall --no-cache-dir pyautogui pillow
+```
+This resolves the common "cannot import pyautogui" or "OSError: scrot not found" errors on fresh Linux installs.
+
 
 If PyAudio fails, install the matching pre-built wheel from https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio and retry.
 
