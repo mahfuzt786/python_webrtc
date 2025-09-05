@@ -44,20 +44,6 @@ Your prompt should now start with **(webenv)**.
 
 ## 4. Install dependencies
 
-### Windows
-```powershell
-pip install -r requirements.txt
-```
-
-### Linux
-```bash
-pip install -r requirements_linux.txt
-```
-
-### macOS
-```bash
-pip install -r requirements_mac.txt
-```
 The process can take a few minutes – it pulls packages such as **OpenCV**, **aiortc**, **PyAudio**, etc.
 
 > **Linux extra packages**  
@@ -88,6 +74,21 @@ The process can take a few minutes – it pulls packages such as **OpenCV**, **a
 If PyAudio fails, install the matching pre-built wheel from https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio and retry.
 
 ---
+
+### Windows
+```powershell
+pip install -r requirements.txt
+```
+
+### Linux
+```bash
+pip install -r requirements_linux.txt
+```
+
+### macOS
+```bash
+pip install -r requirements_mac.txt
+```
 
 ## 5. Run the signalling server **with Docker (alternative)**
 
