@@ -17,8 +17,10 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y \
     libasound2-dev \
     portaudio19-dev \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
+    build-essential \
+    python3-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ------------- Project setup -----------------

@@ -11,7 +11,7 @@ aiortc>=1.6.0
 av>=12.0
 aiohttp>=3.9.5
 miniupnpc
-natpmp
+py-natpmp
 GPUtil
 pyautogui
 # Needed for PyAutoGUI on X11

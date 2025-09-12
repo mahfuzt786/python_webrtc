@@ -111,20 +111,42 @@ pip install -r requirements_linux.txt
 pip install -r requirements_mac.txt
 ```
 
-## 5. Run the signalling server **with Docker (alternative)**
+## 5. Run with Docker
+You have two options:
 
-If you don’t want to install Python on the host machine you can containerise just the signalling server.  The GUI scripts still run on your desktop.
+1. **Signalling-server only** – keep the GUI native (simplest).  
+2. **Full stack** – containerise the GUI as well (needs X-forwarding).
 
-```powershell
-# Build image (only once)
-docker build -t webrtc-hub .
-
-# Or use the provided compose file
-docker compose up -d  # builds & starts container named 'webrtc_signalling'
+### 5.1 Signalling only (all OSes)
+```bash
+# build once then run
+docker compose up -d signalling
 ```
-The container exposes port **8765**; make sure it is open in your firewall / router.
+The server listens on **port 8765**.
 
-Continue with step 6 to run the Host GUI.
+### 5.2 Full stack (signalling + GUI)
+The `docker-compose.yml` already contains a `gui` service that forwards the X11 display.
+
+• **Linux host**
+```bash
+xhost +local:root                 # allow containers to use your X server
+export DISPLAY=:0                 # or :1 etc. – whatever `echo $DISPLAY` prints
+docker compose up -d              # builds & starts gui + signalling
+```
+
+• **Windows / macOS host**
+1. Start an X-server application (VcXsrv / XQuartz).  
+2. In the same terminal:
+```powershell
+$Env:DISPLAY="host.docker.internal:0.0"   # pass host display into container
+docker compose up -d
+```
+The Tk window will appear on your desktop once the `gui` container starts.
+
+> Troubleshooting:
+> • *cannot connect to X server* – ensure the X-server is running and access control is disabled (`xhost +`).  
+> • *~/.Xauthority not found* – the compose file already sets `XAUTHORITY=/dev/null`; keep that env-var if you override the service settings.
+
 
 ---
 

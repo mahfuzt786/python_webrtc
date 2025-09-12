@@ -6,3 +6,16 @@ services:
     ports:
       - "8765:8765"  # host:container
     restart: unless-stopped
+
+  gui:
+    build:
+      context: .
+      dockerfile: Dockerfile.gui
+    container_name: webrtc_gui
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - XAUTHORITY=/dev/null
+    depends_on:
+      - signalling
